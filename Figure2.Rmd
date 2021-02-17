@@ -1,0 +1,302 @@
+---
+title: "Bayesian updating of EXCEL results - Figure 2"
+author: "J Brophy"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    highlight: tango
+    theme: cerulean
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+link-citations: yes
+linkcolor: red
+urlcolor: blue
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(digits=3)
+```
+
+## Load data
+
+Data set was created in Figure1.Rmd file. This file takes the EXCEL data and updates it with an informative prior based on similar completed RCTs.
+
+```{r results='asis', warning=FALSE, message=FALSE}
+
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(ggthemes)
+library(metafor)
+library(meta)
+
+# Load dataset created and saved in Figure1.Rmd
+temp <- read.csv("data1.csv", header = TRUE)
+prior <- temp[1:3,]
+```
+
+## Primary outcome
+The first analysis examines the EXCEL primary outcome - death, non-fatal MI, and stroke - from both the prior data and the new (EXCEL) data. 
+
+
+
+### Function for congugate normal analyses
+
+Given the large sample sizes the distributions can be approximated as normal.    
+Here is a function that takes the prior and likelihood risk differences, both expressed as a mean and variance, and combines them in a conjugate normal analysis to get the posterior distributions.
+
+```{r}
+post.normal.mean <- function(data.mean, data.var, prior.mean, prior.var)
+{
+####################################################################
+#  R function for Bayesian analysis of normal mean, variance known #
+#  Parameters included are:                                        #
+#                                                                  #
+#  Inputs:                                                         #
+#                                                                  #
+#   x = vector of data                                             #
+#   prior.mean = prior mean                                        #
+#   prior.var  = prior variance                                    #
+#   data.var   = assumed known variance of data                    #
+#                                                                  #
+#  Outputs:                                                        #
+#                                                                  #
+#   post.mean = posterior mean                                     #
+#   post.var  = posterior variance                                 #
+#                                                                  #
+####################################################################
+
+post.mean.numerator <- prior.mean/prior.var + data.mean/data.var
+post.mean.denominator <- 1/prior.var + 1/data.var
+post.mean <-  post.mean.numerator/post.mean.denominator
+post.var <- (1/(1/prior.var + 1/data.var))
+a <- "Post mean = "
+b <- "Post Var = "
+c <- "Post SD = "
+cat(a, post.mean, ",", b, post.var, ",", c, sqrt(post.var), "\n" )
+newlist <- list(post.mean, post.var, sqrt(post.var))
+return(newlist)
+}
+
+```
+
+
+### Primary outcome using prior information    
+
+#### Random effects model of previous studies
+
+We now use estimates of effect size and the variance of the 3 previous studies obtained under a random effects model which includes both the within and between study variances.     
+We will combine this prior information with the EXCEL data using the congugate normal function defined previously. 
+
+```{r}
+# prior primary outcome, random effects model for the risk differences
+prior <- temp[1:3,]
+RD_re <- rma(ai=Pe, n1i= Ne, ci=Pc, n2i=Nc, data=prior, measure="RD",
+           slab=paste(Study), method="REML")
+
+# from above rma function 
+prior.diff.prim.mean <-RD_re$beta
+prior.diff.prim.sd <- RD_re$se
+
+```
+#### Combing EXCEL with prior information
+
+```{r}
+# same procedure for the EXCEL data (likelihood)
+like.e.prim.mean <-temp[4,5]/temp[4,9] # like PCI (experimental) for 1o outcome
+like.c.prim.mean <-temp[4,4]/temp[4,8]
+like.diff.prim.mean <- like.e.prim.mean- like.c.prim.mean
+
+like.e.prim.sd <-sqrt(like.e.prim.mean * (1-like.e.prim.mean) / temp[4,9])
+like.c.prim.sd <-sqrt(like.c.prim.mean * (1-like.c.prim.mean) /temp[4,8])
+like.diff.prim.sd <-sqrt(like.e.prim.sd^2 + like.c.prim.sd^2)
+
+# EXCEL primary outcome + random effects model of previous studies combined with normal conjugacy
+data.mean <- like.diff.prim.mean # EXCEL data
+data.var <- like.diff.prim.sd^2
+
+prior.mean <- RD_re$beta  # rma estimates
+prior.var <- RD_re$se^2 
+
+post.primary <- post.normal.mean(data.mean, data.var, prior.mean, prior.var)
+post.primary
+```
+
+#### Triplot for primary outcome Figure 2a
+
+```{r}
+df <- data.frame(100*rbind(c(prior.diff.prim.mean, prior.diff.prim.sd), c(like.diff.prim.mean, like.diff.prim.sd), c(post.primary[[1]], post.primary[[3]])))
+df$type <- c("Prior", "EXCEL", "Posterior")
+df <- df %>%
+  rename(mean = X1, se = X2)
+
+fig2a <- ggplot(data.frame(x = c(-4, 10)), aes(x = x)) +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), colour = "deeppink") +
+        stat_function(fun = dnorm, args = list(0.0181*100, 0.0275*100), colour = "blue") +
+        stat_function(fun = dnorm, args = list(like.diff.prim.mean*100, like.diff.prim.sd*100), colour = "dark green") +
+        ggtitle("Triplot of primary outcome \n(prior, likelihood and posterior PDFs)") +
+        xlab ("Primary outcome difference (PCI - CABG)") +
+        ylab ("Density") +
+        annotate("text", label = "Blue line \n prior information \n (SYNTAX, NOBLE \n& PRECOMBAT) ", x = -2, y = .1, color = "black") +
+        annotate("text", label = "Green line \n likelihood from EXCEL ", x = 6.5, y = .11, color = "black") + 
+        annotate("text", label = "Red line posterior (all data) \n probability > 0 = 96% (yellow + grey) \nprobability > 1 = 86% (grey) ", x = 5.5, y = .22, color = "black") +
+        theme_economist() +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), 
+                xlim = c(1,8), geom = "area", alpha = 0.2) +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), 
+                xlim = c(0,1), geom = "area", alpha = 0.2, fill = "yellow") 
+fig2a
+paste(" Combined posterior mean of EXCEL data and prior studies while accounting for betweeen study variation = ", round(post.primary[[1]]*100,2), " (", round(post.primary[[3]]*100, 2), ") more outcomes with PCI")
+
+paste("95% CrI", round(post.primary[[1]]*100 - 1.96 * post.primary[[3]]*100,2), " - ", round(post.primary[[1]]*100 + 1.96 * post.primary[[3]]*100,2))  
+
+paste(" Probability that primary outcome PCI risk > CABG risk")
+1-pnorm(0, post.primary[[1]], post.primary[[3]])
+paste(" Probability that primary outcome PCI risk > CABG risk by at least 1 / 100 treated")
+1-pnorm(.01, post.primary[[1]], post.primary[[3]])
+```
+
+
+### Secondary (Mortality) Outcome
+
+```{r}
+# likelihood EXCEL mortality
+
+like.e.mort.mean <-temp[4,3]/temp[4,9] # like PCI (experimental) for 1o outcome
+like.c.mort.mean <-temp[4,2]/temp[4,8]
+like.diff.mort.mean <- like.e.mort.mean- like.c.mort.mean
+
+like.e.mort.sd <-sqrt(like.e.mort.mean * (1-like.e.mort.mean) / temp[4,9])
+like.c.mort.sd <-sqrt(like.c.mort.mean * (1-like.c.mort.mean) /temp[4,8])
+like.diff.mort.sd <-sqrt(like.e.mort.sd^2 + like.c.mort.sd^2)
+
+# prior
+# from rma function program
+prior <- temp[1:3,]
+RD_re <- rma(ai=Me, n1i= Ne, ci=Mc, n2i=Nc, data=prior, measure="RD",
+           slab=paste(Study), method="REML")
+
+# EXCEL mortality outcome + random effects model of previous studies combined with normal conjugacy
+data.mean <- like.diff.mort.mean # EXCEL data
+data.var <- like.diff.mort.sd^2
+prior.mean <- RD_re$beta  # rma estimates
+prior.var <- RD_re$se^2 
+post.primary <- post.normal.mean(data.mean, data.var, prior.mean, prior.var)
+post.primary
+
+paste("Posterior probability of PCI mortality > CABG  and > by 1 in 100 treated")
+1-pnorm(0, post.primary[[1]], post.primary[[3]])
+1-pnorm(.01, post.primary[[1]], post.primary[[3]])
+
+```
+
+#### Triplot for mortality outcome Figure 2b
+
+```{r}
+df <- data.frame(100*rbind(c(RD_re$beta, RD_re$se), c(like.diff.mort.mean, like.diff.mort.sd), c(post.primary[[1]], post.primary[[3]])))
+df$type <- c("Prior", "EXCEL", "Posterior")
+df <- df %>%
+  rename(mean = X1, se = X2)
+
+fig2b <- ggplot(data.frame(x = c(-4, 8)), aes(x = x)) +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), colour = "deeppink") +
+        stat_function(fun = dnorm, args = list(RD_re$beta*100, RD_re$se*100), colour = "blue") +
+        stat_function(fun = dnorm, args = list(like.diff.mort.mean*100, like.diff.mort.sd*100), colour = "dark green") +
+        ggtitle("Triplot of mortality outcome \n(prior, likelihood and posterior PDFs)") +
+        xlab ("Mortality difference (PCI - CABG)") +
+        ylab ("Density") +
+        annotate("text", label = "Blue line \n prior information \n (SYNTAX, NOBLE \n& PRECOMBAT) ", x = -2, y = .1, color = "black") +
+        annotate("text", label = "Green line \n likelihood from EXCEL ", x = 5, y = .11, color = "black") + 
+        annotate("text", label = "Red line posterior (all data) \n probability > 0 = 85% (yellow + grey) \nprobability > 1 = 47% (grey) ", x = 4, y = .35, color = "black") +
+        theme_economist() +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), 
+                xlim = c(1,8), geom = "area", alpha = 0.2) +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), 
+                xlim = c(0,1), geom = "area", alpha = 0.2, fill = "yellow") 
+fig2b
+paste(" Combined posterior mean of EXCEL data and prior studies while accounting for betweeen study variation = ", round(post.primary[[1]]*100,2), " (", round(post.primary[[3]]*100, 2), ") more outcomes with PCI")
+post.primary[[1]]*100 # posterior mean
+post.primary[[3]]*100 # posterior SE
+post.primary[[1]]*100 + c(-1,1) * 1.96 * post.primary[[3]]*100  # posterior 95% CI
+
+```
+
+### Secondary (MACCE) outcome
+
+```{r}
+# likelihood EXCEL mortality
+
+like.e.macce.mean <-temp[4,7]/temp[4,9] # like PCI (experimental) for 1o outcome
+like.c.macce.mean <-temp[4,6]/temp[4,8]
+like.diff.macce.mean <- like.e.macce.mean- like.c.macce.mean
+
+like.e.macce.sd <-sqrt(like.e.macce.mean * (1-like.e.macce.mean) / temp[4,9])
+like.c.macce.sd <-sqrt(like.c.macce.mean * (1-like.c.macce.mean) /temp[4,8])
+like.diff.macce.sd <-sqrt(like.e.macce.sd^2 + like.c.macce.sd^2)
+
+# prior
+# from rma function program
+prior <- temp[1:3,]
+RD_re <- rma(ai=Re, n1i= Ne, ci=Rc, n2i=Nc, data=prior, measure="RD",
+           slab=paste(Study), method="REML")
+
+# posterior
+# EXCEL primary outcome + random effects pooling of previous studies
+data.mean <- like.diff.macce.mean # EXCEL data
+data.var <- like.diff.macce.sd^2
+prior.mean <- RD_re$beta # rma estimates
+prior.var <- RD_re$se^2
+post.primary <- post.normal.mean(data.mean, data.var, prior.mean, prior.var)
+post.primary
+```
+
+#### Triplot for MACCE outcome Figure 2c
+
+
+```{r}
+df <- data.frame(100*rbind(c(RD_re$beta, RD_re$se), c(like.diff.macce.mean, like.diff.macce.sd), c(post.primary[[1]], post.primary[[3]])))
+df$type <- c("Prior", "EXCEL", "Posterior")
+df <- df %>%
+  rename(mean = X1, se = X2)
+
+fig2c <- ggplot(data.frame(x = c(0, 12)), aes(x = x)) +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), colour = "deeppink") +
+        stat_function(fun = dnorm, args = list(RD_re$beta*100, RD_re$se*100), colour = "blue") +
+        stat_function(fun = dnorm, args = list(like.diff.macce.mean*100, like.diff.macce.sd*100), colour = "dark green") +
+        ggtitle("Triplot of MACCE outcome \n(prior, likelihood and posterior PDFs)") +
+        xlab ("MACCE difference (PCI - CABG)") +
+        ylab ("Density") +
+        annotate("text", label = "Blue line \n prior information \n (SYNTAX, NOBLE \n& PRECOMBAT) ", x = 2, y = .08, color = "black") +
+        annotate("text", label = "Green line \n likelihood from EXCEL ", x = 10.5, y = .11, color = "black") + 
+        annotate("text", label = "Red line posterior (all data) \n probability > 0 = 99.9% (yellow + grey) \nprobability > 5 = 90% (grey) ", x = 2.8, y = .21, color = "black") +
+        theme_economist() +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), 
+                xlim = c(5,12), geom = "area", alpha = 0.2) +
+        stat_function(fun = dnorm, args = list(post.primary[[1]]*100, post.primary[[3]]*100), 
+                xlim = c(0,5), geom = "area", alpha = 0.2, fill = "yellow") 
+fig2c
+post.primary[[1]]*100 # posterior mean
+post.primary[[3]]*100 # posterior SE
+paste("95% CrI", round(post.primary[[1]]*100 - 1.96 * post.primary[[3]]*100,2), " - ", round(post.primary[[1]]*100 + 1.96 * post.primary[[3]]*100,2))  
+paste(" Probability > 0 - 5 extra events ")
+1-pnorm(0, post.primary[[1]], post.primary[[3]])
+1-pnorm(.01, post.primary[[1]], post.primary[[3]])
+1-pnorm(.02, post.primary[[1]], post.primary[[3]])
+1-pnorm(.03, post.primary[[1]], post.primary[[3]])
+1-pnorm(.04, post.primary[[1]], post.primary[[3]])
+1-pnorm(.05, post.primary[[1]], post.primary[[3]])
+```
+
+## Combining graphs to pdf
+
+```{r}
+pdf("fig2.pdf")
+plot(fig2a)
+plot(fig2b)
+plot(fig2c)
+dev.off()
+```
+
